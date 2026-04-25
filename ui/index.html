@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>lead</title>
+    <link rel="stylesheet" href="/xterm.css">
+    <link rel="stylesheet" href="/app.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-brand">
+        <div class="sidebar-brand">
+          <span class="brand-mark"></span>
+          <strong>lead</strong>
+        </div>
+      </div>
+      <nav class="topbar-nav" aria-label="Primary">
+        <button class="nav-link active" type="button" data-section="add">Create</button>
+        <button class="nav-link" type="button" data-section="access">Connect</button>
+        <button class="nav-link" type="button" data-section="docs">Docs</button>
+      </nav>
+      <button id="nav-toggle" class="nav-toggle" type="button" aria-label="Open menu" aria-expanded="false">
+        <span class="nav-toggle-open">☰</span>
+        <span class="nav-toggle-close hidden">X</span>
+      </button>
+    </header>
+
+    <div id="nav-overlay" class="nav-overlay hidden"></div>
+    <aside id="nav-drawer" class="nav-drawer hidden" aria-label="Mobile navigation">
+      <div class="nav-drawer-head">
+        <div class="sidebar-brand">
+          <span class="brand-mark"></span>
+          <strong>lead</strong>
+        </div>
+      </div>
+      <nav class="nav-drawer-links">
+        <button class="nav-link active" type="button" data-section="add">Create</button>
+        <button class="nav-link" type="button" data-section="access">Connect</button>
+        <button class="nav-link" type="button" data-section="docs">Docs</button>
+      </nav>
+    </aside>
+
+    <div class="page-shell">
+      <main class="main-panel">
+        <p id="global-note" class="section-note muted"></p>
+
+        <section id="section-add" class="section-view dashboard-view">
+          <div class="widget-grid widget-grid-single">
+            <section class="widget minimal-panel">
+              <form id="server-form" class="form-grid form-fill">
+                <label>
+                  <span>Name</span>
+                  <input name="name" placeholder="Production box" required>
+                </label>
+                <label>
+                  <span>Host</span>
+                  <input name="host" placeholder="192.168.1.20" required>
+                </label>
+                <div class="split">
+                  <label>
+                    <span>User</span>
+                    <input name="username" placeholder="root" required>
+                  </label>
+                  <label>
+                    <span>Port</span>
+                    <input name="port" value="22">
+                  </label>
+                </div>
+                <label>
+                  <span>Password</span>
+                  <input name="password" type="password" placeholder="Optional: used directly for SSH auth">
+                </label>
+                <div class="form-actions">
+                  <button type="submit">Save Server</button>
+                </div>
+              </form>
+            </section>
+          </div>
+        </section>
+
+        <section id="section-access" class="section-view dashboard-view hidden">
+          <div class="widget-grid">
+            <section class="server-list-wrap widget minimal-panel">
+              <div id="server-list" class="server-list widget-scroll"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="section-docs" class="section-view dashboard-view hidden">
+          <div class="widget-grid widget-grid-single">
+            <section class="widget minimal-panel docs-panel">
+              <div class="docs-command">
+                <code>exit</code>
+                <p>Close the remote shell and return to Lead.</p>
+              </div>
+              <div class="docs-command">
+                <code>delete</code>
+                <p>Remove the current server from Lead and close its shell.</p>
+              </div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <section id="shell-modal" class="shell-modal hidden" aria-hidden="true">
+      <div class="shell-window">
+        <header class="shell-head">
+          <h2 id="shell-server-name">None selected</h2>
+          <p id="shell-server-meta" class="muted"></p>
+        </header>
+        <div id="shell-status" class="status shell-status hidden" aria-live="polite">
+          <div class="shell-loader" aria-hidden="true"></div>
+          <span id="shell-status-text">Opening remote shell...</span>
+        </div>
+        <div id="shell-terminal" class="terminal shell-output"></div>
+      </div>
+    </section>
+
+    <script src="/xterm.js"></script>
+    <script src="/xterm-addon-fit.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>
