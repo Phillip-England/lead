@@ -44,6 +44,78 @@ const els = {
   shellStatusText: document.querySelector("#shell-status-text"),
 };
 
+const sectionDefaultFocus = {
+  add: () => els.form.elements.namedItem("name"),
+  access: () => (
+    els.serverList.querySelector("[data-server]")
+    || getVisibleNavLinks().find((link) => link.dataset.section === "access")
+    || null
+  ),
+  docs: () => getVisibleNavLinks()[0] || null,
+};
+
+function isElementVisible(element) {
+  if (!element || element.closest(".hidden")) {
+    return false;
+  }
+  return element.getClientRects().length > 0;
+}
+
+function getVisibleNavLinks() {
+  return Array.from(els.navLinks).filter((link) => (
+    isElementVisible(link) && link.closest(".topbar-nav, .nav-drawer-links")
+  ));
+}
+
+function getSectionFocusables() {
+  if (state.activeSection === "add") {
+    return [
+      ...Array.from(els.form.querySelectorAll("input, button")),
+    ].filter(isElementVisible);
+  }
+
+  if (state.activeSection === "access") {
+    return Array.from(els.serverList.querySelectorAll("[data-server]")).filter(isElementVisible);
+  }
+
+  return [];
+}
+
+function getFocusCycle() {
+  return [...getVisibleNavLinks(), ...getSectionFocusables()];
+}
+
+function focusElement(element) {
+  if (!element) {
+    return;
+  }
+  element.focus();
+  if (typeof element.select === "function" && element.matches("input")) {
+    element.select();
+  }
+}
+
+function focusDefaultForActiveSection() {
+  const target = sectionDefaultFocus[state.activeSection]?.() || getFocusCycle()[0] || null;
+  focusElement(target);
+}
+
+function focusRelative(direction) {
+  const cycle = getFocusCycle();
+  if (!cycle.length) {
+    return;
+  }
+
+  const currentIndex = cycle.indexOf(document.activeElement);
+  if (currentIndex === -1) {
+    focusElement(direction > 0 ? cycle[0] : cycle[cycle.length - 1]);
+    return;
+  }
+
+  const nextIndex = (currentIndex + direction + cycle.length) % cycle.length;
+  focusElement(cycle[nextIndex]);
+}
+
 function setShellLoading(message = "", busy = false) {
   const loading = Boolean(message);
   els.shellStatus.classList.toggle("hidden", !loading);
@@ -189,7 +261,13 @@ function renderServers() {
     const indicatorLabel = accessible ? "Accessible" : "Inaccessible";
 
     return `
-      <article class="server-item ${isActive ? "active" : ""}" data-server="${server.id}">
+      <article
+        class="server-item ${isActive ? "active" : ""}"
+        data-server="${server.id}"
+        tabindex="0"
+        role="button"
+        aria-label="Connect to ${escapeHTML(server.name)}"
+      >
         <div class="server-row">
           <div class="server-main">
             <h3>${escapeHTML(server.name)}</h3>
@@ -205,6 +283,13 @@ function renderServers() {
 
   els.serverList.querySelectorAll("[data-server]").forEach((row) => {
     row.addEventListener("click", () => {
+      void accessServer(row.dataset.server);
+    });
+    row.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      event.preventDefault();
       void accessServer(row.dataset.server);
     });
   });
@@ -358,6 +443,11 @@ async function loadServers() {
 
   renderServers();
   renderSections();
+  window.requestAnimationFrame(() => {
+    if (!isElementVisible(document.activeElement) || document.activeElement === document.body) {
+      focusDefaultForActiveSection();
+    }
+  });
   refreshServerStatuses();
 }
 
@@ -531,6 +621,9 @@ function closeShellView() {
   if (state.terminal) {
     state.terminal.clear();
   }
+  window.requestAnimationFrame(() => {
+    focusDefaultForActiveSection();
+  });
 }
 
 function escapeHTML(value) {
@@ -555,6 +648,9 @@ els.form.addEventListener("submit", async (event) => {
     els.form.reset();
     state.activeSection = "access";
     await loadServers();
+    window.requestAnimationFrame(() => {
+      focusDefaultForActiveSection();
+    });
   } catch (error) {
     els.globalNote.textContent = error.message;
   }
@@ -565,6 +661,9 @@ els.navLinks.forEach((link) => {
     state.activeSection = link.dataset.section;
     renderSections();
     closeMobileNav();
+    window.requestAnimationFrame(() => {
+      focusDefaultForActiveSection();
+    });
   });
 });
 
@@ -585,6 +684,34 @@ window.addEventListener("resize", () => {
   }
 });
 
+document.addEventListener("keydown", (event) => {
+  if (
+    event.defaultPrevented ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    state.shellSessionId
+  ) {
+    return;
+  }
+
+  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") {
+    return;
+  }
+
+  const active = document.activeElement;
+  if (!active || !getFocusCycle().includes(active)) {
+    return;
+  }
+
+  event.preventDefault();
+  focusRelative(event.key === "ArrowDown" ? 1 : -1);
+});
+
 loadServers().catch((error) => {
   els.globalNote.textContent = error.message;
+});
+
+window.requestAnimationFrame(() => {
+  focusDefaultForActiveSection();
 });

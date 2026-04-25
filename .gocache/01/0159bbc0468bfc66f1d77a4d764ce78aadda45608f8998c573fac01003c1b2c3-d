@@ -1,0 +1,4 @@
+./keyring.go
+./keyring_darwin.go
+./keyring_fallback.go
+./keyring_mock.go

@@ -1,0 +1,5 @@
+./app.go
+./main.go
+./secrets.go
+./ssh.go
+./store.go

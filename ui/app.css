@@ -25,8 +25,9 @@ body {
 
 body {
   margin: 0;
-  min-height: 100vh;
+  min-height: 100dvh;
   overflow: hidden;
+  overscroll-behavior-y: none;
   font-family: "Space Grotesk", "Segoe UI", sans-serif;
   color: var(--text);
   background:
@@ -99,7 +100,7 @@ label,
 
 .page-shell {
   display: block;
-  height: calc(100vh - 60px);
+  height: calc(100dvh - 60px);
 }
 
 .main-panel {
@@ -185,6 +186,12 @@ label,
   box-shadow: none;
 }
 
+.nav-link:focus-visible {
+  outline: none;
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent-strong);
+}
+
 .nav-toggle {
   display: none;
   margin-left: auto;
@@ -251,7 +258,7 @@ label,
 }
 
 .dashboard-view {
-  height: calc(100vh - 60px - 2rem - 52px);
+  height: calc(100dvh - 60px - 2rem - 52px);
 }
 
 .widget-grid {
@@ -341,8 +348,9 @@ label,
 .server-item {
   border: 1px solid transparent;
   border-bottom-color: rgba(166, 126, 255, 0.12);
-  border-radius: 0;
-  padding: 0.95rem 0;
+  border-radius: 0.85rem;
+  margin: 0.2rem 0;
+  padding: 0.95rem 0.9rem;
   background: transparent;
   display: grid;
   gap: 0.8rem;
@@ -351,12 +359,20 @@ label,
 }
 
 .server-item.active {
-  border-bottom-color: rgba(190, 147, 255, 0.4);
+  border-color: rgba(190, 147, 255, 0.4);
+  background: rgba(151, 92, 255, 0.04);
 }
 
 .server-item:hover {
   background: rgba(151, 92, 255, 0.06);
   border-bottom-color: rgba(190, 147, 255, 0.26);
+}
+
+.server-item:focus-visible {
+  outline: none;
+  background: rgba(151, 92, 255, 0.08);
+  border-bottom-color: rgba(190, 147, 255, 0.46);
+  box-shadow: inset 0 0 0 1px rgba(190, 147, 255, 0.32);
 }
 
 .server-row {
@@ -611,7 +627,7 @@ body.shell-open .nav-drawer {
 
   .page-shell {
     height: auto;
-    min-height: 100vh;
+    min-height: calc(100dvh - 60px);
   }
 
   .main-panel {
