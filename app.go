@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -16,6 +19,7 @@ import (
 type App struct {
 	store         *Store
 	static        http.FileSystem
+	sessionToken  string
 	shellSessions map[string]*ShellSession
 	mu            sync.RWMutex
 }
@@ -30,6 +34,7 @@ func NewApp(store *Store, static http.FileSystem) *App {
 	return &App{
 		store:         store,
 		static:        static,
+		sessionToken:  newID(),
 		shellSessions: map[string]*ShellSession{},
 	}
 }
@@ -37,8 +42,8 @@ func NewApp(store *Store, static http.FileSystem) *App {
 func (a *App) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", a.handleIndex)
-	mux.HandleFunc("/api/servers", a.handleServers)
-	mux.HandleFunc("/api/servers/", a.handleServerActions)
+	mux.Handle("/api/servers", a.requireSession(http.HandlerFunc(a.handleServers)))
+	mux.Handle("/api/servers/", a.requireSession(http.HandlerFunc(a.handleServerActions)))
 	mux.Handle("/app.css", http.FileServer(a.static))
 	mux.Handle("/app.js", http.FileServer(a.static))
 	mux.Handle("/xterm.css", http.FileServer(a.static))
@@ -66,7 +71,15 @@ func (a *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.ServeContent(w, r, "index.html", info.ModTime(), file.(io.ReadSeeker))
+	indexBytes, err := io.ReadAll(file)
+	if err != nil {
+		http.Error(w, "read index", http.StatusInternalServerError)
+		return
+	}
+
+	indexHTML := strings.ReplaceAll(string(indexBytes), "__LEAD_SESSION_TOKEN__", a.sessionToken)
+	w.Header().Set("Cache-Control", "no-store")
+	http.ServeContent(w, r, "index.html", info.ModTime(), bytes.NewReader([]byte(indexHTML)))
 }
 
 func (a *App) handleServers(w http.ResponseWriter, r *http.Request) {
@@ -158,12 +171,6 @@ func (a *App) handleServerActions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.handleTestServer(w, server)
-	case "exec":
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		a.handleExec(w, r, server)
 	case "shell":
 		a.handleShellRoutes(w, r, server, parts[2:])
 	default:
@@ -184,41 +191,6 @@ func (a *App) handleTestServer(w http.ResponseWriter, server ServerRecord) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":      true,
 		"message": strings.TrimSpace(output),
-	})
-}
-
-func (a *App) handleExec(w http.ResponseWriter, r *http.Request, server ServerRecord) {
-	var input struct {
-		Command string `json:"command"`
-		Cwd     string `json:"cwd"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
-	}
-
-	if strings.TrimSpace(input.Command) == "" {
-		writeError(w, http.StatusBadRequest, "command is required")
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	output, err := execRemoteCommand(ctx, server, input.Cwd, input.Command)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{
-			"ok":     false,
-			"output": output,
-			"error":  err.Error(),
-		})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":     true,
-		"output": output,
 	})
 }
 
@@ -301,7 +273,7 @@ func (a *App) handleShellSocket(ws *websocket.Conn, session *ShellSession) {
 
 	inputMessages := make(chan shellMessage, 16)
 	inputErr := make(chan error, 1)
-	outputMessages := make(chan string, 16)
+	outputMessages := make(chan []byte, 16)
 	outputErr := make(chan error, 1)
 
 	go readShellMessages(ws, inputMessages, inputErr)
@@ -321,10 +293,17 @@ func (a *App) handleShellSocket(ws *websocket.Conn, session *ShellSession) {
 				}
 			}
 		case output := <-outputMessages:
-			if output == "" {
+			if len(output) == 0 {
 				continue
 			}
-			if err := websocket.Message.Send(ws, output); err != nil {
+			payload, err := json.Marshal(shellOutputMessage{
+				Type: "output",
+				Data: base64.StdEncoding.EncodeToString(output),
+			})
+			if err != nil {
+				return
+			}
+			if err := websocket.Message.Send(ws, string(payload)); err != nil {
 				return
 			}
 		case err := <-inputErr:
@@ -348,6 +327,11 @@ type shellMessage struct {
 	Rows int    `json:"rows"`
 }
 
+type shellOutputMessage struct {
+	Type string `json:"type"`
+	Data string `json:"data"`
+}
+
 func readShellMessages(ws *websocket.Conn, messages chan<- shellMessage, readErr chan<- error) {
 	for {
 		var raw string
@@ -364,12 +348,14 @@ func readShellMessages(ws *websocket.Conn, messages chan<- shellMessage, readErr
 	}
 }
 
-func readShellOutput(shell *RemoteShell, output chan<- string, outputErr chan<- error) {
+func readShellOutput(shell *RemoteShell, output chan<- []byte, outputErr chan<- error) {
 	buf := make([]byte, 4096)
 	for {
 		n, err := shell.Read(buf)
 		if n > 0 {
-			output <- string(buf[:n])
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+			output <- chunk
 		}
 		if err != nil {
 			outputErr <- err
@@ -406,8 +392,48 @@ func (a *App) deleteShellSession(id string) {
 func withHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (a *App) requireSession(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !requestOriginAllowed(r) {
+			writeError(w, http.StatusForbidden, "origin not allowed")
+			return
+		}
+		if !a.requestHasValidSessionToken(r) {
+			writeError(w, http.StatusForbidden, "session token required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func requestOriginAllowed(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+
+	originURL, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+
+	return strings.EqualFold(originURL.Host, r.Host)
+}
+
+func (a *App) requestHasValidSessionToken(r *http.Request) bool {
+	token := strings.TrimSpace(r.Header.Get("X-Lead-Session"))
+	if token == "" {
+		token = strings.TrimSpace(r.URL.Query().Get("token"))
+	}
+	return token != "" && token == a.sessionToken
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

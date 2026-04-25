@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="lead-session-token" content="__LEAD_SESSION_TOKEN__">
     <title>lead</title>
     <link rel="stylesheet" href="/xterm.css">
     <link rel="stylesheet" href="/app.css">
@@ -82,16 +83,7 @@
         <section id="section-access" class="section-view dashboard-view hidden">
           <div class="widget-grid">
             <section class="server-list-wrap widget minimal-panel">
-              <div class="connect-toolbar">
-                <div class="mode-toggle" role="tablist" aria-label="Connect mode">
-                  <button class="mode-toggle-option active" type="button" data-connect-mode="single">Single</button>
-                  <button class="mode-toggle-option" type="button" data-connect-mode="multi">Multi</button>
-                </div>
-              </div>
               <div id="server-list" class="server-list widget-scroll"></div>
-              <div id="multi-connect-bar" class="multi-connect-bar hidden">
-                <button id="connect-all" type="button">Connect to All</button>
-              </div>
             </section>
           </div>
         </section>
@@ -101,6 +93,7 @@
             <section class="widget minimal-panel docs-panel">
               <div class="docs-group">
                 <h3>Single Shell</h3>
+                <p class="docs-copy">Select a server from Connect to open its shell. Lead works with one server at a time.</p>
                 <div class="docs-command">
                   <code>exit</code>
                   <p>Close the remote shell and return to Lead.</p>
@@ -108,33 +101,6 @@
                 <div class="docs-command">
                   <code>delete</code>
                   <p>Remove the current server from Lead and close its shell.</p>
-                </div>
-              </div>
-
-              <div class="docs-group">
-                <h3>Multi Shell</h3>
-                <p class="docs-copy">Select two or more servers, open one shared terminal, and run line-based commands across all active targets at once.</p>
-                <p class="docs-copy">Servers are assigned indexes like <code>0</code>, <code>1</code>, <code>2</code> based on their order when multi shell opens. Every server starts active.</p>
-                <p class="docs-copy">A green <code>●</code> means the server is an active target. A red <code>●</code> means it is inactive.</p>
-                <div class="docs-command">
-                  <code>docs</code>
-                  <p>Show native multi-shell commands and the indexed target list inside the terminal.</p>
-                </div>
-                <div class="docs-command">
-                  <code>all</code>
-                  <p>Activate every indexed server target.</p>
-                </div>
-                <div class="docs-command">
-                  <code>on &lt;index&gt;</code>
-                  <p>Activate one server target without changing the others.</p>
-                </div>
-                <div class="docs-command">
-                  <code>off &lt;index&gt;</code>
-                  <p>Deactivate one server target.</p>
-                </div>
-                <div class="docs-command">
-                  <code>only &lt;index&gt;</code>
-                  <p>Deactivate every other server and keep only that target active.</p>
                 </div>
               </div>
             </section>

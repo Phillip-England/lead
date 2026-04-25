@@ -361,36 +361,6 @@ func execRemoteCommand(ctx context.Context, server ServerRecord, cwd string, com
 	return runSSH(ctx, server, script)
 }
 
-func execShellCommand(ctx context.Context, server ServerRecord, cwd string, command string) (string, string, error) {
-	script := command
-	if strings.TrimSpace(cwd) != "" {
-		script = fmt.Sprintf("cd -- %s && %s", shellQuote(cwd), command)
-	}
-
-	script = fmt.Sprintf("%s\nprintf '\\n__LEAD_CWD__\\n'\npwd", script)
-
-	output, err := runSSH(ctx, server, script)
-	parts := strings.SplitN(output, "__LEAD_CWD__", 2)
-	if len(parts) != 2 {
-		if err != nil {
-			return output, cwd, err
-		}
-		return output, cwd, fmt.Errorf("remote shell did not report its working directory")
-	}
-
-	commandOutput := strings.TrimSpace(parts[0])
-	nextCwd := strings.TrimSpace(parts[1])
-	if nextCwd == "" {
-		nextCwd = cwd
-	}
-
-	if err != nil {
-		return commandOutput, nextCwd, err
-	}
-
-	return commandOutput, nextCwd, nil
-}
-
 func (s *RemoteShell) Read(p []byte) (int, error) {
 	return s.stdout.Read(p)
 }

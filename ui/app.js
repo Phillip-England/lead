@@ -3,24 +3,25 @@ const state = {
   activeServerId: null,
   activeSection: "add",
   mobileNavOpen: false,
-  connectMode: "single",
-  selectedServerIds: [],
   serverStatus: {},
-  shellMode: null,
   shellSessionId: null,
   shellServerId: null,
   shellSocket: null,
-  multiServerIds: [],
-  multiTargetIds: [],
-  multiInputBuffer: "",
-  multiCommandBusy: false,
   terminal: null,
   fitAddon: null,
   resizeObserver: null,
-  shellControlBuffer: "",
+  shellControlBuffer: new Uint8Array(0),
+  shellOutputDecoder: new TextDecoder(),
 };
 
 const leadDeleteSentinel = "__LEAD_DELETE_SERVER__";
+const leadDeleteCommand = "lead_delete_server";
+const textEncoder = new TextEncoder();
+const leadDeleteMarker = `\n${leadDeleteSentinel}\n`;
+const leadDeleteMarkerBytes = textEncoder.encode(leadDeleteMarker);
+const leadSessionToken = document
+  .querySelector('meta[name="lead-session-token"]')
+  ?.getAttribute("content") || "";
 
 const els = {
   form: document.querySelector("#server-form"),
@@ -34,9 +35,6 @@ const els = {
   sectionAdd: document.querySelector("#section-add"),
   sectionAccess: document.querySelector("#section-access"),
   sectionDocs: document.querySelector("#section-docs"),
-  connectModeLinks: document.querySelectorAll("[data-connect-mode]"),
-  multiConnectBar: document.querySelector("#multi-connect-bar"),
-  connectAll: document.querySelector("#connect-all"),
   globalNote: document.querySelector("#global-note"),
   shellModal: document.querySelector("#shell-modal"),
   shellTerminal: document.querySelector("#shell-terminal"),
@@ -56,10 +54,6 @@ function setShellLoading(message = "", busy = false) {
 
 function activeServer() {
   return state.servers.find((server) => server.id === state.activeServerId) || null;
-}
-
-function activeMultiServers() {
-  return state.servers.filter((server) => state.multiServerIds.includes(server.id));
 }
 
 function isMobileNav() {
@@ -94,30 +88,11 @@ function renderSections() {
   });
 }
 
-function renderConnectMode() {
-  els.connectModeLinks.forEach((button) => {
-    button.classList.toggle("active", button.dataset.connectMode === state.connectMode);
-  });
-
-  const selectedCount = state.selectedServerIds.length;
-  const showMultiConnect = state.connectMode === "multi" && selectedCount >= 2;
-  els.multiConnectBar.classList.toggle("hidden", !showMultiConnect);
-  els.connectAll.textContent = showMultiConnect ? `Connect to All (${selectedCount})` : "Connect to All";
-}
-
-function setConnectMode(mode) {
-  state.connectMode = mode;
-  if (mode === "single") {
-    state.selectedServerIds = [];
-  }
-  renderConnectMode();
-  renderServers();
-}
-
 async function api(url, options = {}) {
   const response = await fetch(url, {
     headers: {
       "Content-Type": "application/json",
+      "X-Lead-Session": leadSessionToken,
       ...(options.headers || {}),
     },
     ...options,
@@ -125,7 +100,9 @@ async function api(url, options = {}) {
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.error || "Request failed");
+    const error = new Error(data.error || "Request failed");
+    Object.assign(error, data);
+    throw error;
   }
   return data;
 }
@@ -136,7 +113,6 @@ function ensureTerminal() {
   }
 
   state.terminal = new Terminal({
-    convertEol: true,
     cursorBlink: true,
     fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
     fontSize: 14,
@@ -152,10 +128,6 @@ function ensureTerminal() {
   state.terminal.loadAddon(state.fitAddon);
   state.terminal.open(els.shellTerminal);
   state.terminal.onData((data) => {
-    if (state.shellMode === "multi") {
-      handleMultiTerminalInput(data);
-      return;
-    }
     if (!state.shellSocket || state.shellSocket.readyState !== WebSocket.OPEN) {
       return;
     }
@@ -168,6 +140,24 @@ function ensureTerminal() {
   state.resizeObserver.observe(els.shellTerminal);
 }
 
+function nextAnimationFrame() {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => resolve());
+  });
+}
+
+async function prepareTerminalLayout() {
+  ensureTerminal();
+  await nextAnimationFrame();
+  fitTerminal();
+  await nextAnimationFrame();
+  fitTerminal();
+
+  if (state.terminal && state.terminal.rows > 0) {
+    state.terminal.refresh(0, state.terminal.rows - 1);
+  }
+}
+
 function fitTerminal() {
   if (!state.terminal || !state.fitAddon) {
     return;
@@ -175,7 +165,7 @@ function fitTerminal() {
 
   state.fitAddon.fit();
 
-  if (state.shellMode !== "single" || !state.shellSocket || state.shellSocket.readyState !== WebSocket.OPEN) {
+  if (!state.shellSocket || state.shellSocket.readyState !== WebSocket.OPEN) {
     return;
   }
 
@@ -193,18 +183,13 @@ function renderServers() {
   }
 
   els.serverList.innerHTML = state.servers.map((server) => {
-    const isSelected = state.selectedServerIds.includes(server.id);
-    const isActive = state.connectMode === "single" && server.id === state.activeServerId;
-    const stateClass = isSelected ? "selected" : (isActive ? "active" : "");
+    const isActive = server.id === state.activeServerId;
     const accessible = state.serverStatus[server.id] === true;
     const indicatorClass = accessible ? "status-green" : "status-red";
     const indicatorLabel = accessible ? "Accessible" : "Inaccessible";
-    const multiIndicator = state.connectMode === "multi"
-      ? `<span class="server-select-indicator" aria-hidden="true">${isSelected ? "Selected" : ""}</span>`
-      : "";
 
     return `
-      <article class="server-item ${stateClass}" data-server="${server.id}">
+      <article class="server-item ${isActive ? "active" : ""}" data-server="${server.id}">
         <div class="server-row">
           <div class="server-main">
             <h3>${escapeHTML(server.name)}</h3>
@@ -212,7 +197,6 @@ function renderServers() {
               <span>${escapeHTML(server.username)}@${escapeHTML(server.host)}:${escapeHTML(server.port)}</span>
             </div>
           </div>
-          ${multiIndicator}
           <span class="server-indicator ${indicatorClass}" title="${indicatorLabel}" aria-label="${indicatorLabel}"></span>
         </div>
       </article>
@@ -221,12 +205,80 @@ function renderServers() {
 
   els.serverList.querySelectorAll("[data-server]").forEach((row) => {
     row.addEventListener("click", () => {
-      if (state.connectMode === "multi") {
-        toggleServerSelection(row.dataset.server);
-        return;
-      }
-      accessServer(row.dataset.server);
+      void accessServer(row.dataset.server);
     });
+  });
+}
+
+function decodeBase64ToBytes(value) {
+  const binary = window.atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function concatBytes(left, right) {
+  const combined = new Uint8Array(left.length + right.length);
+  combined.set(left, 0);
+  combined.set(right, left.length);
+  return combined;
+}
+
+function indexOfBytes(haystack, needle, fromIndex = 0) {
+  if (needle.length === 0) {
+    return fromIndex;
+  }
+
+  const maxStart = haystack.length - needle.length;
+  for (let i = fromIndex; i <= maxStart; i += 1) {
+    let matches = true;
+    for (let j = 0; j < needle.length; j += 1) {
+      if (haystack[i + j] !== needle[j]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      return i;
+    }
+  }
+
+  return -1;
+}
+
+function trailingPartialMarkerLength(bytes, marker) {
+  const maxLength = Math.min(bytes.length, marker.length - 1);
+  for (let length = maxLength; length > 0; length -= 1) {
+    let matches = true;
+    const start = bytes.length - length;
+    for (let i = 0; i < length; i += 1) {
+      if (bytes[start + i] !== marker[i]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      return length;
+    }
+  }
+
+  return 0;
+}
+
+function writeTerminalChunk(data) {
+  if (!state.terminal || !data.length) {
+    return;
+  }
+
+  const text = state.shellOutputDecoder.decode(data, { stream: true });
+  if (!text) {
+    return;
+  }
+
+  state.terminal.write(text, () => {
+    state.terminal.scrollToBottom();
   });
 }
 
@@ -235,203 +287,66 @@ function writeTerminalData(data) {
     return;
   }
 
-  const combined = state.shellControlBuffer + data;
-  if (combined.includes(leadDeleteSentinel)) {
-    state.shellControlBuffer = "";
-    const filtered = combined.replaceAll(leadDeleteSentinel, "");
-    if (filtered) {
-      state.terminal.write(filtered, () => {
-        state.terminal.scrollToBottom();
-      });
-    }
+  const combined = concatBytes(state.shellControlBuffer, data);
+  let shouldDeleteServer = false;
+  let searchStart = 0;
+  let matchIndex = indexOfBytes(combined, leadDeleteMarkerBytes, searchStart);
+
+  while (matchIndex !== -1) {
+    writeTerminalChunk(combined.slice(searchStart, matchIndex));
+    shouldDeleteServer = true;
+    searchStart = matchIndex + leadDeleteMarkerBytes.length;
+    matchIndex = indexOfBytes(combined, leadDeleteMarkerBytes, searchStart);
+  }
+
+  let remainder = combined.slice(searchStart);
+  const pendingMarkerLength = trailingPartialMarkerLength(remainder, leadDeleteMarkerBytes);
+  if (remainder.length > pendingMarkerLength) {
+    const flushLength = remainder.length - pendingMarkerLength;
+    writeTerminalChunk(remainder.slice(0, flushLength));
+    remainder = remainder.slice(flushLength);
+  }
+  state.shellControlBuffer = remainder;
+
+  if (shouldDeleteServer) {
     void deleteActiveServerFromShell();
-    return;
   }
-
-  let bufferLength = 0;
-  const maxPrefixLength = Math.min(leadDeleteSentinel.length - 1, combined.length);
-  for (let length = maxPrefixLength; length > 0; length -= 1) {
-    if (leadDeleteSentinel.startsWith(combined.slice(-length))) {
-      bufferLength = length;
-      break;
-    }
-  }
-
-  state.shellControlBuffer = combined.slice(-bufferLength);
-  const visibleOutput = combined.slice(0, combined.length - bufferLength);
-  if (!visibleOutput) {
-    return;
-  }
-
-  state.terminal.write(visibleOutput, () => {
-    state.terminal.scrollToBottom();
-  });
 }
 
-function writeMultiLine(line = "") {
+function flushShellControlBuffer() {
   if (!state.terminal) {
+    state.shellControlBuffer = new Uint8Array(0);
+    state.shellOutputDecoder = new TextDecoder();
     return;
   }
-  state.terminal.write(`${line}\r\n`, () => {
-    state.terminal.scrollToBottom();
-  });
+
+  if (state.shellControlBuffer.length) {
+    writeTerminalChunk(state.shellControlBuffer);
+  }
+  const trailingText = state.shellOutputDecoder.decode();
+  if (trailingText) {
+    state.terminal.write(trailingText, () => {
+      state.terminal.scrollToBottom();
+    });
+  }
+
+  state.shellControlBuffer = new Uint8Array(0);
+  state.shellOutputDecoder = new TextDecoder();
 }
 
-function writeMultiPrompt(newLine = true) {
+function resetShellOutputState() {
   if (!state.terminal) {
+    state.shellControlBuffer = new Uint8Array(0);
     return;
   }
 
-  const prefix = newLine ? "\r\n" : "";
-  const activeCount = state.multiTargetIds.length;
-  state.terminal.write(`${prefix}\x1b[38;5;141mlead:${activeCount}/${state.multiServerIds.length}> \x1b[0m`);
-}
-
-function findMultiServerIndex(serverId) {
-  return state.multiServerIds.indexOf(serverId);
-}
-
-function isMultiTarget(serverId) {
-  return state.multiTargetIds.includes(serverId);
-}
-
-function formatMultiServerLabel(server) {
-  const index = findMultiServerIndex(server.id);
-  const iconColor = isMultiTarget(server.id) ? "32" : "31";
-  return `\x1b[${iconColor}m●\x1b[0m ${index} ${server.name} (${server.username}@${server.host}:${server.port})`;
-}
-
-function writeMultiTargets() {
-  const servers = activeMultiServers();
-  servers.forEach((server) => {
-    writeMultiLine(`[${formatMultiServerLabel(server)}]`);
-  });
-}
-
-function writeMultiDocs() {
-  writeMultiLine(`\x1b[1;35mMulti shell native commands\x1b[0m`);
-  writeMultiLine(`\x1b[38;5;246mGreen ● means active target. Red ● means inactive target.\x1b[0m`);
-  writeMultiLine(`\x1b[38;5;246mEach server keeps its index for the whole multi-shell session.\x1b[0m`);
-  writeMultiLine(`\x1b[38;5;141mdocs\x1b[0m  Show this help.`);
-  writeMultiLine(`\x1b[38;5;141mall\x1b[0m  Activate every server.`);
-  writeMultiLine(`\x1b[38;5;141mon <index>\x1b[0m  Activate one server target.`);
-  writeMultiLine(`\x1b[38;5;141moff <index>\x1b[0m  Deactivate one server target.`);
-  writeMultiLine(`\x1b[38;5;141monly <index>\x1b[0m  Deactivate all other servers and keep only one active.`);
-  writeMultiLine(`\x1b[38;5;141mclear\x1b[0m  Clear the shared terminal.`);
-  writeMultiLine(`\x1b[38;5;141mexit\x1b[0m  Close multi shell.`);
-  writeMultiLine(`\x1b[38;5;246mTargets:\x1b[0m`);
-  writeMultiTargets();
-}
-
-function renderMultiShellIntro() {
-  writeMultiLine(`\x1b[1;35mMulti shell connected\x1b[0m`);
-  writeMultiTargets();
-  writeMultiPrompt();
-}
-
-function updateMultiShellMeta() {
-  const activeCount = state.multiTargetIds.length;
-  els.shellServerMeta.textContent = `${activeCount}/${state.multiServerIds.length} active targets`;
-}
-
-function parseMultiIndexCommand(command, keyword) {
-  const match = command.match(new RegExp(`^${keyword}\\s+(\\d+)$`));
-  if (!match) {
-    return null;
-  }
-  return Number.parseInt(match[1], 10);
-}
-
-function multiServerByIndex(index) {
-  const serverId = state.multiServerIds[index];
-  if (!serverId) {
-    return null;
-  }
-  return state.servers.find((server) => server.id === serverId) || null;
-}
-
-function setMultiTargets(serverIds) {
-  state.multiTargetIds = state.multiServerIds.filter((serverId) => serverIds.includes(serverId));
-  updateMultiShellMeta();
-}
-
-function handleMultiNativeCommand(command) {
-  if (command === "docs") {
-    writeMultiDocs();
-    writeMultiPrompt();
-    return true;
-  }
-
-  if (command === "all") {
-    setMultiTargets([...state.multiServerIds]);
-    writeMultiLine(`\x1b[32mAll targets activated.\x1b[0m`);
-    writeMultiTargets();
-    writeMultiPrompt();
-    return true;
-  }
-
-  const onlyIndex = parseMultiIndexCommand(command, "only");
-  if (onlyIndex !== null) {
-    const server = multiServerByIndex(onlyIndex);
-    if (!server) {
-      writeMultiLine(`\x1b[31mUnknown server index: ${onlyIndex}\x1b[0m`);
-      writeMultiPrompt();
-      return true;
-    }
-    setMultiTargets([server.id]);
-    writeMultiLine(`\x1b[32mOnly target ${onlyIndex} remains active.\x1b[0m`);
-    writeMultiTargets();
-    writeMultiPrompt();
-    return true;
-  }
-
-  const onIndex = parseMultiIndexCommand(command, "on");
-  if (onIndex !== null) {
-    const server = multiServerByIndex(onIndex);
-    if (!server) {
-      writeMultiLine(`\x1b[31mUnknown server index: ${onIndex}\x1b[0m`);
-      writeMultiPrompt();
-      return true;
-    }
-    setMultiTargets([...state.multiTargetIds, server.id]);
-    writeMultiLine(`\x1b[32mTarget ${onIndex} activated.\x1b[0m`);
-    writeMultiTargets();
-    writeMultiPrompt();
-    return true;
-  }
-
-  const offIndex = parseMultiIndexCommand(command, "off");
-  if (offIndex !== null) {
-    const server = multiServerByIndex(offIndex);
-    if (!server) {
-      writeMultiLine(`\x1b[31mUnknown server index: ${offIndex}\x1b[0m`);
-      writeMultiPrompt();
-      return true;
-    }
-    setMultiTargets(state.multiTargetIds.filter((serverId) => serverId !== server.id));
-    writeMultiLine(`\x1b[31mTarget ${offIndex} deactivated.\x1b[0m`);
-    writeMultiTargets();
-    writeMultiPrompt();
-    return true;
-  }
-
-  return false;
-}
-
-function toggleServerSelection(serverId) {
-  if (state.selectedServerIds.includes(serverId)) {
-    state.selectedServerIds = state.selectedServerIds.filter((id) => id !== serverId);
-  } else {
-    state.selectedServerIds = [...state.selectedServerIds, serverId];
-  }
-  renderConnectMode();
-  renderServers();
+  state.shellControlBuffer = new Uint8Array(0);
+  state.shellOutputDecoder = new TextDecoder();
 }
 
 async function loadServers() {
   const data = await api("/api/servers");
   state.servers = data.servers || [];
-  state.selectedServerIds = state.selectedServerIds.filter((id) => state.servers.some((server) => server.id === id));
 
   if (state.activeServerId && !activeServer()) {
     state.activeServerId = null;
@@ -441,7 +356,6 @@ async function loadServers() {
     state.activeServerId = state.servers[0].id;
   }
 
-  renderConnectMode();
   renderServers();
   renderSections();
   refreshServerStatuses();
@@ -457,7 +371,7 @@ async function accessServer(serverId) {
 
 async function deleteServer(serverId) {
   try {
-    if (state.activeServerId === serverId && state.shellMode === "single") {
+    if (state.activeServerId === serverId) {
       await closeShellSession();
     }
     await api(`/api/servers/${serverId}`, { method: "DELETE" });
@@ -465,7 +379,6 @@ async function deleteServer(serverId) {
       state.activeServerId = null;
       closeShellView();
     }
-    state.selectedServerIds = state.selectedServerIds.filter((id) => id !== serverId);
     delete state.serverStatus[serverId];
     els.globalNote.textContent = "";
     await loadServers();
@@ -512,16 +425,16 @@ async function openShell() {
   }
 
   await closeShellSession();
-  ensureTerminal();
-  state.shellMode = "single";
-  state.shellControlBuffer = "";
-  state.terminal.clear();
   els.shellServerName.textContent = server.name;
   els.shellServerMeta.textContent = `${server.username}@${server.host}:${server.port}`;
   document.body.classList.add("shell-open");
   els.shellModal.classList.remove("hidden");
   els.shellModal.setAttribute("aria-hidden", "false");
   setShellLoading("Opening remote shell...", true);
+
+  await prepareTerminalLayout();
+  resetShellOutputState();
+  state.terminal.clear();
 
   try {
     const session = await api(`/api/servers/${server.id}/shell`, {
@@ -539,24 +452,36 @@ async function openShell() {
     setShellLoading("Connecting terminal...", true);
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const socketURL = `${protocol}//${window.location.host}/api/servers/${server.id}/shell/${state.shellSessionId}/ws`;
+    const socketURL = `${protocol}//${window.location.host}/api/servers/${server.id}/shell/${state.shellSessionId}/ws?token=${encodeURIComponent(leadSessionToken)}`;
     state.shellSocket = new WebSocket(socketURL);
 
     state.shellSocket.addEventListener("open", () => {
+      fitTerminal();
       state.shellSocket.send(JSON.stringify({
         type: "input",
-        data: `delete(){ printf '${leadDeleteSentinel}'; }\r`,
+        data: `${leadDeleteCommand}(){ printf '\\n${leadDeleteSentinel}\\n'; }\r`,
       }));
       setShellLoading("");
-      fitTerminal();
       state.terminal.focus();
     });
 
     state.shellSocket.addEventListener("message", (event) => {
-      writeTerminalData(event.data);
+      let message;
+      try {
+        message = JSON.parse(event.data);
+      } catch (_) {
+        return;
+      }
+
+      if (message.type !== "output" || typeof message.data !== "string") {
+        return;
+      }
+
+      writeTerminalData(decodeBase64ToBytes(message.data));
     });
 
     state.shellSocket.addEventListener("close", () => {
+      flushShellControlBuffer();
       state.shellSocket = null;
       state.shellSessionId = null;
       state.shellServerId = null;
@@ -573,31 +498,6 @@ async function openShell() {
     setShellLoading(error.message);
     els.globalNote.textContent = error.message;
   }
-}
-
-function openMultiShell() {
-  if (state.selectedServerIds.length < 2) {
-    return;
-  }
-
-  closeSocket();
-  ensureTerminal();
-  state.shellMode = "multi";
-  state.multiServerIds = [...state.selectedServerIds];
-  state.multiTargetIds = [...state.selectedServerIds];
-  state.multiInputBuffer = "";
-  state.multiCommandBusy = false;
-  state.shellControlBuffer = "";
-  state.terminal.clear();
-  els.shellServerName.textContent = "Multi shell";
-  updateMultiShellMeta();
-  document.body.classList.add("shell-open");
-  els.shellModal.classList.remove("hidden");
-  els.shellModal.setAttribute("aria-hidden", "false");
-  setShellLoading("");
-  fitTerminal();
-  renderMultiShellIntro();
-  state.terminal.focus();
 }
 
 async function closeShellSession() {
@@ -621,14 +521,9 @@ async function closeShellSession() {
 
 function closeShellView() {
   closeSocket();
-  state.shellMode = null;
   state.shellSessionId = null;
   state.shellServerId = null;
-  state.multiServerIds = [];
-  state.multiTargetIds = [];
-  state.multiInputBuffer = "";
-  state.multiCommandBusy = false;
-  state.shellControlBuffer = "";
+  resetShellOutputState();
   document.body.classList.remove("shell-open");
   els.shellModal.classList.add("hidden");
   els.shellModal.setAttribute("aria-hidden", "true");
@@ -636,138 +531,6 @@ function closeShellView() {
   if (state.terminal) {
     state.terminal.clear();
   }
-}
-
-async function runMultiCommand(command) {
-  if (!command) {
-    writeMultiPrompt();
-    return;
-  }
-
-  if (command === "exit") {
-    closeShellView();
-    return;
-  }
-
-  if (command === "clear") {
-    state.terminal.clear();
-    renderMultiShellIntro();
-    return;
-  }
-
-  if (handleMultiNativeCommand(command)) {
-    return;
-  }
-
-  if (command === "delete") {
-    writeMultiLine(`\x1b[31mdelete is only available in a single-server shell.\x1b[0m`);
-    writeMultiPrompt();
-    return;
-  }
-
-  if (!state.multiTargetIds.length) {
-    writeMultiLine(`\x1b[31mNo active targets. Use 'all', 'on <index>', or 'only <index>'.\x1b[0m`);
-    writeMultiPrompt();
-    return;
-  }
-
-  state.multiCommandBusy = true;
-  writeMultiLine(`\x1b[38;5;141mRunning:\x1b[0m ${command}`);
-
-  const servers = activeMultiServers().filter((server) => isMultiTarget(server.id));
-  const results = await Promise.all(servers.map(async (server) => {
-    try {
-      const response = await api(`/api/servers/${server.id}/exec`, {
-        method: "POST",
-        body: JSON.stringify({ command }),
-      });
-      return {
-        server,
-        ok: true,
-        output: response.output || "",
-      };
-    } catch (error) {
-      return {
-        server,
-        ok: false,
-        output: error.message,
-      };
-    }
-  }));
-
-  results.forEach((result, index) => {
-    const tone = result.ok ? "38;5;111" : "31";
-    const header = formatMultiServerLabel(result.server);
-    const output = normalizeTerminalOutput(result.output) || "\x1b[38;5;246m(no output)\x1b[0m";
-    writeMultiLine(`\x1b[${tone}m[${header}]\x1b[0m`);
-    writeMultiLine(output);
-    if (index < results.length - 1) {
-      writeMultiLine("\x1b[38;5;240m────────────────────────────────────────\x1b[0m");
-    }
-  });
-
-  state.multiCommandBusy = false;
-  writeMultiPrompt();
-}
-
-function handleMultiTerminalInput(data) {
-  if (!state.terminal) {
-    return;
-  }
-
-  for (const char of data) {
-    if (char === "\u0003") {
-      if (!state.multiCommandBusy) {
-        state.multiInputBuffer = "";
-        writeMultiLine("^C");
-        writeMultiPrompt();
-      }
-      continue;
-    }
-
-    if (char === "\r") {
-      if (state.multiCommandBusy) {
-        continue;
-      }
-      const command = state.multiInputBuffer.trim();
-      state.terminal.write("\r\n");
-      state.multiInputBuffer = "";
-      void runMultiCommand(command);
-      continue;
-    }
-
-    if (char === "\u007F") {
-      if (state.multiCommandBusy || !state.multiInputBuffer) {
-        continue;
-      }
-      state.multiInputBuffer = state.multiInputBuffer.slice(0, -1);
-      state.terminal.write("\b \b");
-      continue;
-    }
-
-    if (char === "\u001b") {
-      continue;
-    }
-
-    if (state.multiCommandBusy) {
-      continue;
-    }
-
-    if (char >= " ") {
-      state.multiInputBuffer += char;
-      state.terminal.write(char);
-    }
-  }
-}
-
-function normalizeTerminalOutput(value) {
-  return String(value || "")
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .trimEnd()
-    .split("\n")
-    .map((line) => line || " ")
-    .join("\r\n");
 }
 
 function escapeHTML(value) {
@@ -805,14 +568,6 @@ els.navLinks.forEach((link) => {
   });
 });
 
-els.connectModeLinks.forEach((button) => {
-  button.addEventListener("click", () => {
-    setConnectMode(button.dataset.connectMode);
-  });
-});
-
-els.connectAll.addEventListener("click", openMultiShell);
-
 els.navToggle.addEventListener("click", () => {
   if (state.mobileNavOpen) {
     closeMobileNav();
@@ -830,7 +585,6 @@ window.addEventListener("resize", () => {
   }
 });
 
-renderConnectMode();
 loadServers().catch((error) => {
   els.globalNote.textContent = error.message;
 });
