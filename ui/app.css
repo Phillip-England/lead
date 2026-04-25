@@ -305,6 +305,41 @@ label,
   padding: 0;
 }
 
+.connect-toolbar {
+  padding-bottom: 1rem;
+}
+
+.mode-toggle {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.2rem;
+  padding: 0.2rem;
+  border: 1px solid rgba(166, 126, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.mode-toggle-option {
+  min-width: 88px;
+  padding: 0.45rem 0.8rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.mode-toggle-option.active {
+  background: rgba(151, 92, 255, 0.16);
+  color: var(--text);
+}
+
+.mode-toggle-option:hover {
+  transform: none;
+  box-shadow: none;
+  color: var(--text);
+}
+
 .server-list-wrap .section-head,
 .workspace-head {
   padding-bottom: 0.9rem;
@@ -354,6 +389,11 @@ label,
   border-bottom-color: rgba(190, 147, 255, 0.4);
 }
 
+.server-item.selected {
+  background: rgba(151, 92, 255, 0.09);
+  border-bottom-color: rgba(190, 147, 255, 0.4);
+}
+
 .server-item:hover {
   background: rgba(151, 92, 255, 0.06);
   border-bottom-color: rgba(190, 147, 255, 0.26);
@@ -382,6 +422,13 @@ label,
   color: var(--muted);
 }
 
+.server-select-indicator {
+  min-width: 56px;
+  color: var(--accent-strong);
+  font-size: 0.82rem;
+  text-align: right;
+}
+
 .server-indicator {
   width: 10px;
   height: 10px;
@@ -403,15 +450,37 @@ label,
   align-content: start;
 }
 
+.docs-group {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.docs-group h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
 .docs-command code {
   display: inline-block;
   margin-bottom: 0.35rem;
   color: var(--accent-strong);
 }
 
+.docs-copy {
+  margin: 0;
+  color: var(--muted);
+}
+
 .docs-command p {
   margin: 0;
   color: var(--muted);
+}
+
+.multi-connect-bar {
+  position: sticky;
+  bottom: 0;
+  padding-top: 1rem;
+  background: linear-gradient(180deg, rgba(9, 7, 17, 0), rgba(9, 7, 17, 0.92) 28%);
 }
 
 .eyebrow {
